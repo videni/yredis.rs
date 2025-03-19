@@ -1,6 +1,6 @@
 
 use std::{collections::HashMap, sync::atomic::{AtomicBool, Ordering}};
-use redis::{cmd, streams::{StreamAutoClaimOptions, StreamAutoClaimReply, StreamReadOptions, StreamReadReply}, ConnectionLike, FromRedisValue, RedisResult, Value};
+use redis::{streams::{StreamAutoClaimOptions, StreamAutoClaimReply, StreamReadOptions, StreamReadReply}, ConnectionLike, FromRedisValue};
 use regex::Regex;
 use urlencoding::decode;
 use anyhow::{Result, anyhow};
@@ -186,7 +186,6 @@ impl Api {
                     1 => {
                         let bytes = decoder.read_buf()?;
                         let update = AwarenessUpdate::decode_v1(bytes)?;
-                        // decoder.read_var_u8_array()
                         let _ = awareness.apply_update(update);
                     },
                     _ => {}
