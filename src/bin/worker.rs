@@ -1,1 +1,5 @@
-use y_redis::api::*;
+use yredis::api::*;
+
+fn main() {
+
+}

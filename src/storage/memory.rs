@@ -6,6 +6,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use crate::storage::Storage;
 
+use super::Reference;
+
 pub struct MemoryStorageOpts;
 
 pub fn create_memory_storage(_opts: Option<MemoryStorageOpts>) -> MemoryStorage {
@@ -38,6 +40,7 @@ impl Storage for MemoryStorage {
         
         let reference = Uuid::new_v4().to_string();
         let update = ydoc.transact_mut().encode_state_as_update_v2(&StateVector::default());
+
         doc_refs.insert(reference, update);
         
         Ok(())
@@ -67,7 +70,7 @@ impl Storage for MemoryStorage {
 
                 return Ok(Some(crate::storage::DocState {
                     doc,
-                    references,
+                    references: references.into_iter().map(|r|r.into()).collect::<Vec<_>>(),
                 }));
             }
         }
@@ -75,13 +78,13 @@ impl Storage for MemoryStorage {
         Ok(None)
     }
 
-    async fn delete_references(&self, room: &str, docname: &str, store_references: Vec<String>) -> Result<()> {
+    async fn delete_references(&self, room: &str, docname: &str, store_references: Vec<Reference>) -> Result<()> {
         let mut docs = self.docs.lock().unwrap();
         
         if let Some(room_docs) = docs.get_mut(room) {
             if let Some(doc_refs) = room_docs.get_mut(docname) {
                 for reference in store_references {
-                    doc_refs.remove(reference.as_str());
+                    doc_refs.remove(reference.downcast_ref::<String>().as_str());
                 }
             }
         }

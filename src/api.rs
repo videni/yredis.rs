@@ -10,10 +10,10 @@ use std::sync::Arc;
 use yrs::{encoding::read::{Cursor, Read}, sync::{Awareness, AwarenessUpdate}, updates::decoder::{Decode, Decoder, DecoderV1}, Doc as YDoc, ReadTxn, StateVector, Transact, Update};
 use tokio::time::{sleep, Duration};
 use std::env;
-use crate::storage::Storage;
+use crate::storage::{Reference, Storage};
 use tracing::*;
 
-pub struct Api {
+pub struct Api{
     store: Arc<dyn Storage>,
     prefix: String,
     consumer_name: String,
@@ -83,10 +83,10 @@ impl Api {
         Ok(reads.into_iter().flat_map(|reply|reply.keys).map(|stream| {
             StreamMessage {
                 stream: stream.key.to_string(),
-                // messages: stream.ids.iter()
-                //     .filter_map(|m| m.map.get("m").cloned())
-                //     .collect(),
-                messages: vec![],
+                messages: stream.ids.iter()
+                    .filter_map(|m|m.map.get("m") )
+                    .map(|m|  bytes::Bytes::from_redis_value(m).unwrap().to_vec())
+                    .collect(),
                 last_id: stream.ids.last()
                     .map(|m| m.id.to_string())
                     .unwrap_or_default()
@@ -146,7 +146,6 @@ impl Api {
         let doc_messages = ms.get(room)
             .and_then(|m| m.get(docid));
         
-        dbg!(&doc_messages);
         let doc_state = self.store.retrieve_doc(room, docid).await?;
         info!("getDoc({}, {}) - retrieved doc", room, docid);
 
@@ -227,7 +226,6 @@ impl Api {
             }
         }
 
-        dbg!(&tasks);
         if tasks.is_empty() {
             info!("No tasks available, pausing..");
             sleep(Duration::from_secs(1)).await;
@@ -258,13 +256,10 @@ impl Api {
                     doc_result.store_references
                 );
 
-
                 let last_id = std::cmp::max(
                     parse_redis_id(&doc_result.redis_last_id),
                     parse_redis_id(task_id)
                 );
-                dbg!(&doc_result.doc_changed);
-
                 if doc_result.doc_changed {
                     info!("doc changed, calling update callback");
                     if let Err(e) = update_callback(&room, &doc_result.ydoc) {
@@ -273,6 +268,10 @@ impl Api {
                     
                     info!("persisting doc");
                     self.store.persist_doc(&room, &docid, &doc_result.ydoc).await?;
+                }
+
+                if doc_result.doc_changed && !doc_result.store_references.is_empty() {
+                    self.store.delete_references(&room, &docid, doc_result.store_references).await?;
                 }
 
                 let min_id = last_id.saturating_sub(self.redis_min_message_lifetime / 1000);
@@ -336,7 +335,7 @@ pub struct DocResult {
     pub ydoc: YDoc,
     pub awareness: Awareness,
     pub redis_last_id: String,
-    pub store_references: Vec<String>,
+    pub store_references: Vec<Reference>,
     pub doc_changed: bool,
 }
 

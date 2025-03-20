@@ -1,18 +1,44 @@
 pub mod memory;
+pub mod postgres;
+
+use std::any::Any;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use yrs::{updates::encoder::Encode, Transact, Doc as YDoc, ReadTxn};
-use std::vec;
 
-#[derive(Debug)]
 pub struct DocState {
     pub doc: YDoc,
-    pub references: Vec<String>,
+    pub references: Vec<Reference>,
+}
+
+#[derive(Debug)]
+pub struct Reference(Box<dyn Any + Send + Sync +'static>);
+
+impl Reference {
+    pub fn new<T>(value: T) -> Self where T: Clone + Send + Sync + 'static {
+        Self(Box::new(value))
+    }
+
+    pub fn downcast_ref<T>(&self) -> T  where T: Clone + Send + Sync +  'static{
+        self.0.downcast_ref::<T>().expect("Invalid reference").clone()
+    }
+}
+
+impl From<String> for Reference {
+    fn from(value: String) -> Self {
+        Self(Box::new(value))
+    }
+}
+
+impl From<i32> for Reference {
+    fn from(value: i32) -> Self {
+        Self(Box::new(value))
+    }
 }
 
 #[async_trait]
-pub trait Storage: Send + Sync {
+pub trait Storage: Send + Sync  {
     async fn persist_doc(&self, _room: &str, _docname: &str, _ydoc: &YDoc) -> Result<()> {
         unimplemented!("persist_doc not implemented")
     }
@@ -37,8 +63,8 @@ pub trait Storage: Send + Sync {
         &self, 
         _room: &str, 
         _docname: &str, 
-        _store_references: Vec<String>
-    ) -> Result<()> {
+        _store_references: Vec<Reference>
+    ) -> Result<()>{
         unimplemented!("delete_references not implemented")
     }
 
