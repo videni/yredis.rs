@@ -1,35 +1,36 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
-use rand::Rng;
 use crate::api::{is_smaller_redis_id, Api};
+use crate::storage::Storage;
+use tokio::sync::RwLock;
 
-type SubHandler = Box<dyn Fn(String, Vec<Vec<u8>>) + Send + Sync + 'static>;
+pub type SubHandler = Box<dyn Fn(String, Vec<Vec<u8>>) + Send + Sync + 'static>;
 
 #[derive(Clone)]
-pub struct Subscriber {
-    client: Arc<Api>,
+pub struct Subscriber<S: Storage + 'static> {
+    client: Arc<RwLock<Api<S>>>,
     subs: Arc<Mutex<HashMap<String, Subscription>>>,
 }
 
 struct Subscription {
-    handlers: Vec<SubHandler>,
+    handlers: Vec<(u32, SubHandler)>,
     id: String,
     next_id: Option<String>,
 }
 
-impl Subscriber {
-    pub async fn new(client: Api) -> Self {
+impl <S: Storage + 'static> Subscriber<S> {
+    pub async fn new(client: Arc<RwLock<Api<S>>>) -> Self {
         let subs = Arc::new(Mutex::new(HashMap::new()));
-        let shared_client = Arc::new(client);
         let subscriber = Self {
-            client: shared_client.clone(),
+            client: client.clone(),
             subs: subs.clone(),
         };
 
         tokio::spawn(async move {
             loop {
-                if let Err(e) = Self::poll_messages(shared_client.clone(), &subs).await {
+                if let Err(e) = Self::poll_messages(client.clone(), &subs).await {
                     eprintln!("Poll error: {}", e);
                     break;
                 }
@@ -39,13 +40,13 @@ impl Subscriber {
         subscriber
     }
 
-    async fn poll_messages(client: Arc<Api>, subs: &Arc<Mutex<HashMap<String, Subscription>>>) -> Result<()> {
+    async fn poll_messages(client: Arc<RwLock<Api<S>>>, subs: &Arc<Mutex<HashMap<String, Subscription>>>) -> Result<()> {
         let stream_ids = subs.lock().unwrap()
             .iter()
             .map(|(stream, sub)| (stream.clone(), sub.id.clone()))
             .collect();
 
-        let messages = client.get_messages(stream_ids).await?;
+        let messages = client.read().await.get_messages(stream_ids).await?;
         
         for msg in messages {
             let mut subs = subs.lock().unwrap();
@@ -57,8 +58,8 @@ impl Subscriber {
                     sub.next_id = None;
                 }
 
-                for handler in &sub.handlers {
-                    handler(msg.stream.to_owned(), msg.messages.clone())
+                for (_, handler) in &sub.handlers {
+                    handler(msg.stream.to_owned(), msg.messages.clone());
                 }
             }
         }
@@ -66,24 +67,35 @@ impl Subscriber {
         Ok(())
     }
 
-    pub fn subscribe(&self, stream: &str, handler: SubHandler) {
+    pub fn subscribe(&self, stream: &str, handler: SubHandler) -> SubscriptionTicket {
         let mut subs = self.subs.lock().unwrap();
         let sub = subs.entry(stream.to_string())
-            .or_insert_with(||
+            .or_insert_with(|| 
                 Subscription {
                     handlers: Vec::new(),
                     id: "0".to_string(),
                     next_id: None,
                 }
             );
-        //TODO: 每个订阅的可能有自己的 id, next_id, 而不是。
-        sub.handlers.push(handler);
+        // Generate unique handler ID using atomic counter
+        static HANDLER_ID: AtomicU32 = AtomicU32::new(1);
+        let handler_id = HANDLER_ID.fetch_add(1, Ordering::Relaxed);
+        sub.handlers.push((handler_id, handler));
+
+        SubscriptionTicket {
+            handler_id,
+            redis_id: sub.id.clone(),
+            stream: stream.to_string(),
+        }
     }
 
     pub fn unsubscribe(&self, stream: &str, handler_id: u32) {
         let mut subs = self.subs.lock().unwrap();
         if let Some(sub) = subs.get_mut(stream) {
-           //TODO:  
+            sub.handlers.retain(|(id, _)| *id != handler_id);
+            if sub.handlers.is_empty() {
+                subs.remove(stream);
+            }
         }
     }
 
@@ -97,16 +109,9 @@ impl Subscriber {
     }
 }
 
-// #[derive(Clone)]
-// pub struct HandlerTicket {
-//     handler_id:u32,
-//     stream: String,
-//     subscriber: Subscriber,
-//     _handler: Arc<SubHandler>,
-// }
-
-// impl Drop for HandlerTicket {
-//     fn drop(&mut self) {
-//         self.subscriber.unsubscribe(&self.stream, self.handler_id);
-//     }
-// }
+#[derive(Clone)]
+pub struct SubscriptionTicket {
+    pub handler_id:u32,
+    pub stream: String,
+    pub redis_id: String,
+}

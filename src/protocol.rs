@@ -111,14 +111,14 @@ pub fn encode_awareness_update(awareness: &Awareness, clients: Vec<u64>) -> Resu
 }
 
 /// Encodes an awareness message for a disconnected user
-pub fn encode_awareness_user_disconnected(client_id: u64, last_clock: u32) -> Result<Vec<u8>> {
+pub fn encode_awareness_user_disconnected(client_id: u64, last_clock: u64) -> Result<Vec<u8>> {
     let mut encoder = EncoderV1::new();
     encoder.write_u8(MSG_AWARENESS);
     
     let mut sub_encoder = EncoderV1::new();
     sub_encoder.write_u64 (1u64); 
     sub_encoder.write_u64(client_id);
-    sub_encoder.write_u64((last_clock + 1) as u64);
+    sub_encoder.write_u64(last_clock + 1);
     sub_encoder.write_string("null"); // Null JSON state
     
     encoder.write_buf(&sub_encoder.to_vec());
