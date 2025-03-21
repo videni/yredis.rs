@@ -4,7 +4,7 @@ use anyhow::Result;
 use axum::extract::ws::WebSocket;
 use futures_util::{SinkExt, StreamExt};
 use axum::extract::ws::Message;
-use tracing::{info, error};
+use tracing::{error, info, trace};
 use yrs::encoding::read::{Cursor, Read};
 use yrs::encoding::write::Write;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
@@ -183,6 +183,7 @@ async fn handle_connection(
     
     // Message handling loop
     while let Some(msg) = ws_receiver.next().await {
+        trace!("WS-handle_connection: received message");
         match msg {
             Ok(Message::Binary(data)) => {
                 let mut user_guard = user.write().await;

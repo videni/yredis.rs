@@ -1,9 +1,19 @@
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
+use tracing::Level;
 use yredis::{api::*, storage::{memory::MemoryStorage, postgres::PostgresStorage, Storage}};
+use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main()  -> anyhow::Result<()>{
     dotenvy::dotenv().expect("Failed to load .env file");
+
+    let log_level = std::env::var("LOG_LEVEL").unwrap_or("info".into());
+
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::from_str(log_level.as_str()))
+        .finish();
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default subscriber failed");
 
     let storage_url = &std::env::var("DATABASE_URL").unwrap_or("memory:".into());
 

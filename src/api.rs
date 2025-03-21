@@ -449,6 +449,7 @@ impl Worker {
     }
 
     pub async fn run(&mut self) {
+        
         loop {
             if let Err(e) = self.client.consume_worker_queue(
                 self.opts.try_claim_count,
