@@ -19,7 +19,10 @@ async fn main()  -> anyhow::Result<()>{
 
     let option = WorkerOpts {
         try_claim_count: 5,
-        update_callback:  Arc::new(|_, _| Ok(()))
+        update_callback:  Arc::new(|_, _| {
+            //TODO: your update callback
+            Ok(())
+        })
     };
 
     let mut worker = create_worker(storage, redis_prefix, option).await?;

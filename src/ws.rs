@@ -27,7 +27,7 @@ pub async fn make_websocket_server(
     redis_prefix: &str
 ) -> Result<YWebsocketServer> {
     let client = Arc::new(RwLock::new(Api::new(store, redis_prefix.to_string())?));
-
+  
     let subscriber = Arc::new(Subscriber::new(client.clone()).await);
 
     Ok(YWebsocketServer::new(client, subscriber))
@@ -109,7 +109,7 @@ async fn handle_connection(
     subscriber: Arc<Subscriber>,
     init_doc_callback: Arc<impl Fn(&str, &str, &Api) -> Result<()> + Send + Sync>
 ) -> Result<()> {
-    let (mut ws_sender, mut ws_receiver) = websocket.split();
+    let (ws_sender, mut ws_receiver) = websocket.split();
     
     // Set up Redis subscription
     let room = user.read().await.room.clone();
@@ -150,6 +150,7 @@ async fn handle_connection(
     
     // Get the initial document state
     let mut client_guard = client.write().await;
+    // TODO: why  hardcoded docid to "index"?
     let index_doc = client_guard.get_doc(&room, "index").await?;
     
     //TODO: Initialize document if needed
@@ -168,9 +169,8 @@ async fn handle_connection(
     ws_sender.send(Message::Binary(encode_sync_step2(&update).into())).await?;
     
     // Send awareness states if any
-    if index_doc.awareness.iter().collect::<Vec<_>>().len() > 0 {
-        let client_ids: Vec<u64> = index_doc.awareness.iter().map(|(id, _)| id).collect();
-
+    let client_ids: Vec<u64> = index_doc.awareness.iter().map(|(id, _)| id).collect();
+    if client_ids.len() > 0 {
         let awareness_update = encode_awareness_update(&index_doc.awareness, client_ids)?;
         ws_sender.send(Message::Binary(awareness_update.into())).await?;
     }
@@ -228,7 +228,7 @@ async fn handle_connection(
                 break;
             },
             Err(e) => {
-                error!("WebSocket error: {}", e);
+                error!("WS-handle_connection WebSocket error: {}", e);
                 break;
             },
             _ => {}
@@ -236,7 +236,7 @@ async fn handle_connection(
     }
     
     // Handle disconnection
-    let mut user_guard = user.read().await;
+    let user_guard = user.read().await;
     
     // Send awareness disconnection message if needed
     if let Some(awareness_id) = user_guard.awareness_id {

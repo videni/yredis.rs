@@ -44,7 +44,7 @@ pub async fn create_api_client(store: Arc<Box<dyn Storage>>, redis_prefix: Strin
 
 impl  Api where  {
     pub fn new(store: Arc<Box<dyn Storage>>, prefix: String) -> Result<Self> {
-        let redis_url = env::var("REDIS_URL")?;
+        let redis_url = env::var("REDIS_URL").unwrap_or("redis://127.0.0.1:6379".to_owned());
         let redis = Client::open(redis_url)?;
         
         Ok(Self {
@@ -107,6 +107,10 @@ impl  Api where  {
             message[1] = yrs::sync::protocol::MSG_SYNC_UPDATE;
             
             let stream_name = compute_redis_room_stream_name(room, docid, &self.prefix);
+            //  Here are what the LUA script does:
+            // 1. create room stream name if not exists, also add the room stream name to the "redis_worker_stream_name"
+            // 2. Associate "pending" consumer to the "redis_worker_stream_name" immediately
+            // 3. Add the message to the "stream_name"
             let add_message_script = format!(
                 r#"if redis.call('EXISTS', KEYS[1]) == 0 then
                     redis.call('XADD', '{0}', '*', 'compact', KEYS[1])

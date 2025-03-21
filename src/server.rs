@@ -31,7 +31,7 @@ async fn websocket_handler(
         
     ws.on_upgrade(move |socket| async move {
         if let Err(e) = handle_socket(socket, room, state).await {
-            eprintln!("WebSocket error: {}", e);
+            eprintln!("YRedis WebSocket error: {}", e);
         }
     })
 }
@@ -42,6 +42,7 @@ async fn handle_socket(
     state: AppState,
 ) -> anyhow::Result<()> {
     let store = state.config.storage.clone();
+  
     let ws_server = make_websocket_server(
         store.clone(),
         state.config.redis_prefix.as_str()
@@ -74,7 +75,7 @@ pub fn create_websocket_handler_router(
     };
 
     let router = Router::new()
-        .route("/:room", get(websocket_handler))
+        .route("/{room}", get(websocket_handler))
         .with_state(state);
 
     router
