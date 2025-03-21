@@ -15,8 +15,8 @@ pub struct WebSocketServerConfig {
 }
 
 #[derive(Clone)]
-struct AppState {
-    config: Arc<WebSocketServerConfig>,
+pub struct AppState {
+    pub config: Arc<WebSocketServerConfig>,
 }
 
 async fn websocket_handler(
@@ -29,17 +29,19 @@ async fn websocket_handler(
     // let token = params.get("yauth")
     //     .ok_or_else(|| anyhow::anyhow!("Missing token"))?;
         
+    let user = Arc::new(RwLock::new(User::new(room, true, "test_user".to_owned())));
+
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = handle_socket(socket, room, state).await {
+        if let Err(e) = handle_socket(socket, user, &state).await {
             eprintln!("YRedis WebSocket error: {}", e);
         }
     })
 }
 
-async fn handle_socket(
+pub async fn handle_socket(
     socket: WebSocket,
-    room: String,
-    state: AppState,
+    user: Arc<RwLock<User>>,
+    state: &AppState,
 ) -> anyhow::Result<()> {
     let store = state.config.storage.clone();
   
@@ -47,8 +49,6 @@ async fn handle_socket(
         store.clone(),
         state.config.redis_prefix.as_str()
     ).await?;
-
-    let user = Arc::new(RwLock::new(User::new(room, true, "test_user".to_owned())));
 
     ws_server.handle(user, socket, |room, index, client| {
         Ok(())

@@ -21,7 +21,6 @@ use crate::protocol::{
 use crate::subscriber::{Subscriber, SubHandler};
 use crate::storage::Storage;
 
-
 pub async fn make_websocket_server(
     store: Arc<Box<dyn Storage>>,
     redis_prefix: &str
@@ -252,7 +251,7 @@ async fn handle_connection(
         subscriber.unsubscribe(topic, subscription_ticket.handler_id);
     }
     
-    info!("Client disconnected: user_id={}", user_guard.id);
+    info!("Client disconnected: user_id={}", user_guard.userid);
     
     Ok(())
 }
