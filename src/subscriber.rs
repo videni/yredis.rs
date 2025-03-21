@@ -9,8 +9,8 @@ use tokio::sync::RwLock;
 pub type SubHandler = Box<dyn Fn(String, Vec<Vec<u8>>) + Send + Sync + 'static>;
 
 #[derive(Clone)]
-pub struct Subscriber<S: Storage + 'static> {
-    client: Arc<RwLock<Api<S>>>,
+pub struct Subscriber {
+    client: Arc<RwLock<Api>>,
     subs: Arc<Mutex<HashMap<String, Subscription>>>,
 }
 
@@ -20,8 +20,8 @@ struct Subscription {
     next_id: Option<String>,
 }
 
-impl <S: Storage + 'static> Subscriber<S> {
-    pub async fn new(client: Arc<RwLock<Api<S>>>) -> Self {
+impl  Subscriber {
+    pub async fn new(client: Arc<RwLock<Api>>) -> Self {
         let subs = Arc::new(Mutex::new(HashMap::new()));
         let subscriber = Self {
             client: client.clone(),
@@ -40,7 +40,7 @@ impl <S: Storage + 'static> Subscriber<S> {
         subscriber
     }
 
-    async fn poll_messages(client: Arc<RwLock<Api<S>>>, subs: &Arc<Mutex<HashMap<String, Subscription>>>) -> Result<()> {
+    async fn poll_messages(client: Arc<RwLock<Api>>, subs: &Arc<Mutex<HashMap<String, Subscription>>>) -> Result<()> {
         let stream_ids = subs.lock().unwrap()
             .iter()
             .map(|(stream, sub)| (stream.clone(), sub.id.clone()))

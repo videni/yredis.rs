@@ -1,12 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use anyhow::Result;
+use axum::extract::ws::WebSocket;
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::{
-    accept_async,
-    tungstenite::protocol::Message,
-};
+use axum::extract::ws::Message;
 use tracing::{info, error};
 use yrs::encoding::read::{Cursor, Read};
 use yrs::encoding::write::Write;
@@ -25,10 +22,10 @@ use crate::subscriber::{Subscriber, SubHandler};
 use crate::storage::Storage;
 
 
-pub async fn create_websocket_server<S: Storage + 'static>(
-    store: S,
+pub async fn make_websocket_server(
+    store: Arc<Box<dyn Storage>>,
     redis_prefix: &str
-) -> Result<YWebsocketServer<S>> {
+) -> Result<YWebsocketServer> {
     let client = Arc::new(RwLock::new(Api::new(store, redis_prefix.to_string())?));
 
     let subscriber = Arc::new(Subscriber::new(client.clone()).await);
@@ -36,7 +33,7 @@ pub async fn create_websocket_server<S: Storage + 'static>(
     Ok(YWebsocketServer::new(client, subscriber))
 }
 
-struct User {
+pub struct User {
     id: usize,
     room: String,
     has_write_access: bool,
@@ -45,11 +42,10 @@ struct User {
     subs: HashSet<String>,
     awareness_id: Option<u64>,
     awareness_last_clock: u64,
-    is_closed: bool,
 }
 
 impl User {
-    fn new(room: String, has_write_access: bool, userid: String) -> Self {
+    pub fn new(room: String, has_write_access: bool, userid: String) -> Self {
         static mut ID_COUNTER: usize = 0;
         let id = unsafe {
             ID_COUNTER += 1;
@@ -65,84 +61,61 @@ impl User {
             subs: HashSet::new(),
             awareness_id: None,
             awareness_last_clock: 0,
-            is_closed: false,
         }
     }
 }
 
-pub struct YWebsocketServer<S: Storage + 'static> {
-    client: Arc<RwLock<Api<S>>>,
-    subscriber: Arc<Subscriber<S>>,
+pub struct YWebsocketServer {
+    client: Arc<RwLock<Api>>,
+    subscriber: Arc<Subscriber>,
 }
 
-impl <S: Storage + 'static> YWebsocketServer<S> {
-    pub fn new(client: Arc<RwLock<Api<S>>>, subscriber: Arc<Subscriber<S>>) -> Self {
+impl  YWebsocketServer {
+    pub fn new(client: Arc<RwLock<Api>>, subscriber: Arc<Subscriber>) -> Self {
         Self {
             client,
             subscriber,
         }
     }
    
-    pub async fn listen(
+    pub async fn handle(
         &self, 
-        addr: &str,
-        check_auth: impl Fn(String, String) -> Result<(bool, String, String)> + Send + Sync + 'static,
-        init_doc_callback: impl Fn(&str, &str, &Api<S>) -> Result<()> + Send + Sync + 'static
+        user: Arc<RwLock<User>>,
+        websocket: WebSocket,
+        init_doc_callback: impl Fn(&str, &str, &Api) -> Result<()> + Send + Sync + 'static
     ) -> Result<()> {
-        let listener = TcpListener::bind(addr).await?;
-        info!("WebSocket server listening on {}", addr);
-        
         let client = self.client.clone();
         let subscriber = self.subscriber.clone();
-        let check_auth = Arc::new(check_auth);
         let init_doc_callback = Arc::new(init_doc_callback);
         
-        while let Ok((stream, addr)) = listener.accept().await {
-            info!("New connection from {}", addr);
-            
-            let client = client.clone();
-            let subscriber = subscriber.clone();
-            let check_auth = check_auth.clone();
-            let init_doc_callback = init_doc_callback.clone();
-            
-            tokio::spawn(async move {
-                if let Err(e) = handle_connection(
-                    stream, 
-                    client, 
-                    subscriber,
-                    check_auth,
-                    init_doc_callback
-                ).await {
-                    error!("Connection error: {}", e);
-                }
-            });
+        if let Err(e) = handle_connection(
+            user,
+            websocket, 
+            client, 
+            subscriber,
+            init_doc_callback
+        ).await {
+            error!("Connection error: {}", e);
         }
         
         Ok(())
     }
 }
 
-async fn handle_connection<S: Storage>(
-    stream: TcpStream,
-    client: Arc<RwLock<Api<S>>>,
-    subscriber: Arc<Subscriber<S>>,
-    check_auth: Arc<impl Fn(String, String) -> Result<(bool, String, String)> + Send + Sync>,
-    init_doc_callback: Arc<impl Fn(&str, &str, &Api<S>) -> Result<()> + Send + Sync>
+async fn handle_connection(
+    user: Arc<RwLock<User>>,
+    websocket: WebSocket,
+    client: Arc<RwLock<Api>>,
+    subscriber: Arc<Subscriber>,
+    init_doc_callback: Arc<impl Fn(&str, &str, &Api) -> Result<()> + Send + Sync>
 ) -> Result<()> {
-    // Extract headers and perform authentication
-    let ws_stream = accept_async(stream).await?;
-    let (mut ws_sender, mut ws_receiver) = ws_stream.split();
-    
-    //TODO: In a real implementation, you would extract auth info from headers
-    // For now, we'll use a placeholder
-    let (has_write_access, room, userid) = check_auth("token".to_string(), "/room".to_string())?;
-    
-    let user = Arc::new(Mutex::new(User::new(room.clone(), has_write_access, userid)));
+    let (mut ws_sender, mut ws_receiver) = websocket.split();
     
     // Set up Redis subscription
-    let stream_name = compute_redis_room_stream_name(&room, "index", &client.read().await.prefix);
+    let room = user.read().await.room.clone();
+
+    let stream_name = compute_redis_room_stream_name(room.as_str(), "index", &client.read().await.prefix);
     
-    let user_clone = user.clone();
     let  ws_sender= Arc::new(Mutex::new(ws_sender));
     let ws_sender_clone = ws_sender.clone();
     // Create a handler for Redis messages
@@ -169,7 +142,7 @@ async fn handle_connection<S: Storage>(
     });
     
     // Subscribe to Redis updates
-    let mut user_guard = user.lock().await;
+    let mut user_guard = user.write().await;
     user_guard.subs.insert(stream_name.clone());
     let subscription_ticket = subscriber.subscribe(stream_name.as_str(), redis_message_handler);
     user_guard.initial_redis_sub_id = subscription_ticket.redis_id.clone();
@@ -203,7 +176,7 @@ async fn handle_connection<S: Storage>(
     }
     
     // Check if we need to update subscription ID
-    let user_guard = user.lock().await;
+    let user_guard = user.read().await;
     if is_smaller_redis_id(&index_doc.redis_last_id, &user_guard.initial_redis_sub_id) {
         subscriber.ensure_sub_id(&stream_name, &index_doc.redis_last_id);
     }
@@ -213,7 +186,7 @@ async fn handle_connection<S: Storage>(
     while let Some(msg) = ws_receiver.next().await {
         match msg {
             Ok(Message::Binary(data)) => {
-                let mut user_guard = user.lock().await;
+                let mut user_guard = user.write().await;
                 
                 // Skip messages from users without write access
                 if !user_guard.has_write_access {
@@ -230,7 +203,7 @@ async fn handle_connection<S: Storage>(
                             let mut decoder = yrs::updates::decoder::DecoderV1::new(Cursor::new(data.iter().as_slice()));
                             let _ = decoder.read_u64()?; // read message type
                             let _ = decoder.read_u64()?; // read length of awareness update
-                            let alen = decoder.read_u64()?; // number of awareness updates
+                            let alen: u64 = decoder.read_u64()?; // number of awareness updates
                             let aw_id = decoder.read_u64()?;
                             
                             // Only update awareness if len=1 and either no previous ID or same ID
@@ -263,8 +236,7 @@ async fn handle_connection<S: Storage>(
     }
     
     // Handle disconnection
-    let mut user_guard = user.lock().await;
-    user_guard.is_closed = true;
+    let mut user_guard = user.read().await;
     
     // Send awareness disconnection message if needed
     if let Some(awareness_id) = user_guard.awareness_id {

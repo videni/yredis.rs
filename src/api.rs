@@ -13,8 +13,8 @@ use std::env;
 use crate::storage::{Reference, Storage};
 use tracing::*;
 
-pub struct Api<S: Storage>{
-    store: Arc<S>,
+pub struct Api{
+    store: Arc<Box<dyn Storage>>,
     pub prefix: String,
     consumer_name: String,
     redis_task_debounce: u64,
@@ -24,7 +24,7 @@ pub struct Api<S: Storage>{
     redis: Client,
 }
 
-pub async fn create_api_client<S: Storage>(store: S, redis_prefix: String) -> Result<Api<S>> {
+pub async fn create_api_client(store: Arc<Box<dyn Storage>>, redis_prefix: String) -> Result<Api> {
     let mut api = Api::new(store, redis_prefix)?;
     if !api.redis.get_connection()?.check_connection() {
         return Err(anyhow!("Redis connection failed"));
@@ -42,13 +42,13 @@ pub async fn create_api_client<S: Storage>(store: S, redis_prefix: String) -> Re
     }
 }
 
-impl <S> Api<S> where S: Storage {
-    pub fn new(store: S, prefix: String) -> Result<Self> {
+impl  Api where  {
+    pub fn new(store: Arc<Box<dyn Storage>>, prefix: String) -> Result<Self> {
         let redis_url = env::var("REDIS_URL")?;
         let redis = Client::open(redis_url)?;
         
         Ok(Self {
-            store: Arc::new(store),
+            store,
             prefix: prefix.clone(),
             consumer_name: Uuid::new_v4().to_string(),
             redis_task_debounce: env::var("REDIS_TASK_DEBOUNCE")
@@ -430,13 +430,13 @@ impl Default for WorkerOpts {
     }
 }
 
-pub struct Worker<S: Storage> {
-    client: Api<S>,
+pub struct Worker {
+    client: Api,
     opts: WorkerOpts,
 }
 
-impl <S> Worker<S> where S: Storage {
-    pub async fn new(client: Api<S>, opts: WorkerOpts) -> Self {
+impl Worker {
+    pub async fn new(client: Api, opts: WorkerOpts) -> Self {
         info!(
             "Created worker process id={}, prefix={}, min_message_lifetime={}",
             client.consumer_name, client.prefix, client.redis_min_message_lifetime
@@ -462,11 +462,11 @@ impl <S> Worker<S> where S: Storage {
     }
 }
 
-pub async fn create_worker<S: Storage>(
-    store: S,
+pub async fn create_worker(
+    store: Arc<Box<dyn Storage>>,
     redis_prefix: String,
     opts: WorkerOpts,
-) -> Result<Worker<S>> {
+) -> Result<Worker> {
     let client = create_api_client(store, redis_prefix).await?;
     Ok(Worker::new(client, opts).await)
 }
@@ -504,7 +504,7 @@ mod tests {
         env::set_var("REDIS_URL", "redis://127.0.0.1:6379");
         
         // Create memory storage
-        let store = create_memory_storage(None);
+        let store = Arc::new(Box::new(create_memory_storage(None)) as Box<dyn Storage>);
         
         // Test API client creation
         let result = create_api_client(store, "test_prefix".to_string()).await;
@@ -524,7 +524,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_messages() {
         env::set_var("REDIS_URL", "redis://127.0.0.1:6379");
-        let store = create_memory_storage(None);
+        let store = Arc::new(Box::new(create_memory_storage(None)) as Box<dyn Storage>);
         let api = create_api_client(store, "test_prefix".to_string()).await.unwrap();
         
         // Add a test message to Redis stream
@@ -549,7 +549,7 @@ mod tests {
     #[tokio::test]
     async fn test_add_message() {
         env::set_var("REDIS_URL", "redis://127.0.0.1:6379");
-        let store = create_memory_storage(None);
+        let store = Arc::new(Box::new(create_memory_storage(None)) as Box<dyn Storage>);
         let mut api = create_api_client(store, "test_prefix".to_string()).await.unwrap();
         
         // Create a sync step 2 message
@@ -571,8 +571,8 @@ mod tests {
     #[tokio::test]
     async fn test_consume_worker_queue() {
         env::set_var("REDIS_URL", "redis://127.0.0.1:6379");
-        let store = create_memory_storage(None);
-        let mut api = create_api_client(store, "test_prefix".to_string()).await.unwrap();
+        let store = Box::new(create_memory_storage(None));
+        let mut api = create_api_client(Arc::new(store as Box<dyn Storage>), "test_prefix".to_string()).await.unwrap();
         
         // Prepare test data using add_message
         let message = vec![
