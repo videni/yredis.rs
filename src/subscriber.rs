@@ -113,8 +113,8 @@ pub struct SubscriptionTicket {
 }
 
 
-/// Generates a unique handler ID by finding the first available ID
-/// or using an atomic counter if no gaps are available
+/// 通过查找第一个可用的ID生成唯一的处理器ID
+/// 如果没有可用的空隙则使用原子计数器
 fn generate_unique_handler_id(handlers: &[(u64, SubHandler)]) -> u64 {
     static HANDLER_ID: AtomicU64 = AtomicU64::new(1);
     

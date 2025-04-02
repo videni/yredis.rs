@@ -65,28 +65,47 @@ impl  Api where  {
         })
     }
 
+    
+    /// 从Redis流中获取消息
+    /// 
+    /// # 参数
+    /// * `streams` - 包含(stream_key, last_id)元组的向量，指定要读取的流和起始ID
+    /// 
+    /// # 返回值
+    /// * `Result<Vec<StreamMessage>>` - 返回包含流消息的向量
     pub async fn get_messages(&self, streams: Vec<(String, String)>) -> Result<Vec<StreamMessage>> {
+        // 如果没有指定流，等待50ms后返回空向量
         if streams.is_empty() {
             sleep(Duration::from_millis(50)).await;
             return Ok(vec![]);
         }
 
+        // 将streams拆分为keys和values两个向量
         let (keys, values): (Vec<_>, Vec<_>) = streams.iter().cloned().unzip();
 
+        // 获取Redis连接
         let mut conn = self.redis.get_connection()?;
+        
+        // 从Redis读取流数据
+        // block(1000) - 阻塞1秒等待新数据
+        // count(1000) - 每次最多读取1000条消息
         let reads: Vec<StreamReadReply>  = conn.xread_options(
             &keys,
             &values,
             &StreamReadOptions::default().block(1000).count(1000),
         )?;
 
+        // 处理读取的数据并转换为StreamMessage格式
         Ok(reads.into_iter().flat_map(|reply|reply.keys).map(|stream| {
             StreamMessage {
+                // 流的名称
                 stream: stream.key.to_string(),
+                // 提取消息内容并转换为字节向量
                 messages: stream.ids.iter()
                     .filter_map(|m|m.map.get("m") )
                     .map(|m|  bytes::Bytes::from_redis_value(m).unwrap().to_vec())
                     .collect(),
+                // 获取最后一条消息的ID，如果没有则返回空字符串
                 last_id: stream.ids.last()
                     .map(|m| m.id.to_string())
                     .unwrap_or_default()
@@ -94,6 +113,15 @@ impl  Api where  {
         }).collect())
     }
 
+    /// 将消息添加到以 room， docid 为 key 的stream中。
+    /// 
+    /// # 参数
+    /// * `room` - 房间标识符
+    /// * `docid` - 文档标识符
+    /// * `message` - 要添加的消息内容
+    /// 
+    /// # 返回值
+    /// * `Result<()>` - 操作是否成功
     pub async fn add_message(&mut self, room: &str, docid: &str, message: Vec<u8>) -> Result<()> {
         // handle sync step 2 like a normal update message
         if message.len() >= 2 && 
@@ -107,10 +135,10 @@ impl  Api where  {
             message[1] = yrs::sync::protocol::MSG_SYNC_UPDATE;
             
             let stream_name = compute_redis_room_stream_name(room, docid, &self.prefix);
-            //  Here are what the LUA script does:
-            // 1. create room stream name if not exists, also add the room stream name to the "redis_worker_stream_name"
-            // 2. Associate "pending" consumer to the "redis_worker_stream_name" immediately
-            // 3. Add the message to the "stream_name"
+            // LUA脚本的功能如下:
+            // 1. 如果是新建的房间号，将房间号名称添加到"redis_worker_stream_name"
+            //   1.1. 立即将组redis_worker_group_name中名为"pending"的消费者关联到"redis_worker_stream_name"
+            // 2. 将这个消息添加到"stream_name"
             let add_message_script = format!(
                 r#"if redis.call('EXISTS', KEYS[1]) == 0 then
                     redis.call('XADD', '{0}', '*', 'compact', KEYS[1])
@@ -132,6 +160,26 @@ impl  Api where  {
         self.store.retrieve_state_vector(room, docid).await
     }
 
+    /// 获取指定房间和文档的完整状态
+    ///
+    /// # 参数
+    /// * `room` - 房间标识符
+    /// * `docid` - 文档标识符
+    ///
+    /// # 返回值
+    /// * `Result<DocResult>` - 返回包含以下内容的DocResult:
+    ///   - ydoc: Yjs文档对象
+    ///   - awareness: 文档的awareness状态
+    ///   - redis_last_id: Redis流中最后一条消息的ID
+    ///   - store_references: 存储的引用列表
+    ///   - doc_changed: 文档是否发生变更的标志
+    ///
+    /// # 功能描述
+    /// 1. 从Redis流中读取指定房间和文档的所有消息
+    /// 2. 从存储中获取文档状态
+    /// 3. 创建新的Yjs文档并应用存储的状态
+    /// 4. 处理Redis流中的消息,包括同步消息和awareness消息
+    /// 5. 返回完整的文档状态
     pub async fn get_doc(&mut self, room: &str, docid: &str) -> Result<DocResult> {
         info!("getDoc({}, {})", room, docid);
         
@@ -207,6 +255,25 @@ impl  Api where  {
         })
     }
 
+    /// 消费工作队列中的任务
+    ///
+    /// # 参数
+    /// * `try_claim_count` - 尝试认领的任务数量
+    /// * `update_callback` - 文档更新时的回调函数，接收房间名和文档对象作为参数
+    ///
+    /// # 返回值
+    /// * `Result<Vec<(String, String)>>` - 返回处理的任务列表，每个任务包含 stream 名称和任务 ID
+    ///
+    /// # 功能说明
+    /// 1. 从 Redis 工作队列中认领任务
+    /// 2. 对每个任务进行处理:
+    ///    - 如果流为空，删除相关任务
+    ///    - 否则获取文档状态并进行更新
+    /// 3. 对已更改的文档:
+    ///    - 调用更新回调
+    ///    - 持久化文档
+    ///    - 删除过期引用
+    /// 4. 压缩消息流并更新任务状态
     pub async fn consume_worker_queue(
         &mut self,
         try_claim_count: usize,
