@@ -10,7 +10,7 @@ async fn main()  -> anyhow::Result<()>{
     let log_level = std::env::var("LOG_LEVEL").unwrap_or("info".into());
 
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::from_str(log_level.as_str()))
+        .with_max_level(Level::from_str(log_level.as_str())?)
         .finish();
     tracing::subscriber::set_global_default(subscriber)
         .expect("setting default subscriber failed");

@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use crate::api::{is_smaller_redis_id, Api};
@@ -13,12 +12,12 @@ pub struct Subscriber {
 }
 
 struct Subscription {
-    handlers: Vec<(u64, SubHandler)>,
+    handlers: Vec<(usize, SubHandler)>,
     id: String,
     next_id: Option<String>,
 }
 
-impl  Subscriber {
+impl Subscriber {
     pub async fn new(client: Arc<RwLock<Api>>) -> Self {
         let subscriptions = Arc::new(Mutex::new(HashMap::new()));
         let subscriber = Self {
@@ -74,7 +73,9 @@ impl  Subscriber {
                 }
             );
 
-        let handler_id = generate_unique_handler_id(subscription.handlers.as_slice());
+        let mut rng = fastrand::Rng::new();
+        let id = rng.usize(0..usize::MAX);
+        let handler_id = id;
 
         subscription.handlers.push((handler_id, handler));
 
@@ -85,7 +86,7 @@ impl  Subscriber {
         }
     }
 
-    pub fn unsubscribe(&self, stream: &str, handler_id: u64) {
+    pub fn unsubscribe(&self, stream: &str, handler_id: usize) {
         let mut subscriptions = self.subscriptions.lock().unwrap();
         if let Some(subscription) = subscriptions.get_mut(stream) {
             subscription.handlers.retain(|(id, _)| *id != handler_id);
@@ -107,23 +108,7 @@ impl  Subscriber {
 
 #[derive(Clone)]
 pub struct SubscriptionTicket {
-    pub handler_id:u64,
+    pub handler_id:usize,
     pub stream: String,
     pub redis_id: String,
-}
-
-
-/// 通过查找第一个可用的ID生成唯一的处理器ID
-/// 如果没有可用的空隙则使用原子计数器
-fn generate_unique_handler_id(handlers: &[(u64, SubHandler)]) -> u64 {
-    static HANDLER_ID: AtomicU64 = AtomicU64::new(1);
-    
-    let existing_ids: std::collections::HashSet<u64> = handlers
-        .iter()
-        .map(|(id, _)| *id)
-        .collect();
-    
-    (1..=existing_ids.len() as u64 + 1)
-        .find(|id| !existing_ids.contains(id))
-        .unwrap_or_else(|| HANDLER_ID.fetch_add(1, Ordering::Relaxed))
 }

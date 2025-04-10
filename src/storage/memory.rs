@@ -29,13 +29,13 @@ impl MemoryStorage {
 
 #[async_trait]
 impl Storage for MemoryStorage {
-    async fn persist_doc(&self, room: &str, docname: &str, ydoc: &YDoc) -> Result<()> {
+    async fn persist_doc(&self, room: &str, doc_name: &str, ydoc: &YDoc) -> Result<()> {
         let mut docs = self.docs.lock().unwrap();
         let room_docs = docs
             .entry(room.to_string())
             .or_insert_with(HashMap::new);
         let doc_refs = room_docs
-            .entry(docname.to_string())
+            .entry(doc_name.to_string())
             .or_insert_with(HashMap::new);
         
         let reference = Uuid::new_v4().to_string();
@@ -46,11 +46,11 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    async fn retrieve_doc(&self, room: &str, docname: &str) -> Result<Option<crate::storage::DocState>> {
+    async fn retrieve_doc(&self, room: &str, doc_name: &str) -> Result<Option<crate::storage::DocState>> {
         let docs = self.docs.lock().unwrap();
         
         if let Some(room_docs) = docs.get(room) {
-            if let Some(doc_refs) = room_docs.get(docname) {
+            if let Some(doc_refs) = room_docs.get(doc_name) {
                 if doc_refs.is_empty() {
                     return Ok(None);
                 }
@@ -78,11 +78,11 @@ impl Storage for MemoryStorage {
         Ok(None)
     }
 
-    async fn delete_references(&self, room: &str, docname: &str, store_references: Vec<Reference>) -> Result<()> {
+    async fn delete_references(&self, room: &str, doc_name: &str, store_references: Vec<Reference>) -> Result<()> {
         let mut docs = self.docs.lock().unwrap();
         
         if let Some(room_docs) = docs.get_mut(room) {
-            if let Some(doc_refs) = room_docs.get_mut(docname) {
+            if let Some(doc_refs) = room_docs.get_mut(doc_name) {
                 for reference in store_references {
                     doc_refs.remove(reference.downcast_ref::<String>().as_str());
                 }

@@ -40,9 +40,9 @@ impl PostgresStorage {
         let stmt = sea_orm::Statement::from_string(
             conn.get_database_backend(),
             r#"CREATE TABLE IF NOT EXISTS yredis_docs_v1 (
+                r SERIAL,
                 room TEXT NOT NULL,
                 doc TEXT NOT NULL,
-                r SERIAL,
                 update BYTEA NOT NULL,
                 sv BYTEA NOT NULL,
                 PRIMARY KEY (room, doc, r)
@@ -56,13 +56,13 @@ impl PostgresStorage {
 
 #[async_trait]
 impl Storage for PostgresStorage {
-    async fn persist_doc(&self, room: &str, docname: &str, ydoc: &Doc) -> Result<()> {
+    async fn persist_doc(&self, room: &str, doc_name: &str, ydoc: &Doc) -> Result<()> {
         let update = ydoc.transact_mut().encode_state_as_update_v2(&StateVector::default());
         let sv = ydoc.transact_mut().state_vector().encode_v2();
 
         let model = ActiveModel {
             room: Set(room.to_owned()),
-            doc: Set(docname.to_owned()),
+            doc: Set(doc_name.to_owned()),
             update: Set(update),
             sv: Set(sv),
             ..Default::default()
@@ -72,12 +72,12 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
-    async fn retrieve_doc(&self, room: &str, docname: &str) -> Result<Option<crate::storage::DocState>> {
+    async fn retrieve_doc(&self, room: &str, doc_name: &str) -> Result<Option<crate::storage::DocState>> {
         let docs = Entity::find()
             .filter(
                 Condition::all()
                     .add(Column::Room.eq(room))
-                    .add(Column::Doc.eq(docname))
+                    .add(Column::Doc.eq(doc_name))
             )
             .all(&self.conn)
             .await?;
@@ -86,21 +86,21 @@ impl Storage for PostgresStorage {
             return Ok(None);
         }
 
-        let updates = docs.iter()
-            .map(|m| m.update.clone())
-            .collect::<Vec<_>>();
         let references = docs.iter().map(|m| m.r.into()).collect::<Vec<_>>();
 
+        let updates = docs.into_iter()
+            .map(|m| m.update)
+            .collect::<Vec<_>>();
+
         let merged = Update::merge_updates(updates.iter().map(|u|{
-            Update::decode_v2( u.as_slice()).unwrap()
+            Update::decode_v2(u.as_slice()).unwrap()
         }).collect::<Vec<_>>());
         
         let doc = Doc::new();
         {
             let mut txn = doc.transact_mut();
-            txn.apply_update(merged);
+            txn.apply_update(merged)?;
         }
-
 
         return Ok(Some(crate::storage::DocState {
             doc,
@@ -108,12 +108,12 @@ impl Storage for PostgresStorage {
         }));
     }
 
-    async fn retrieve_state_vector(&self, room: &str, docname: &str) -> Result<Vec<u8>> {
+    async fn retrieve_state_vector(&self, room: &str, doc_name: &str) -> Result<Vec<u8>> {
         let doc = Entity::find()
             .filter(
                 Condition::all()
                     .add(Column::Room.eq(room))
-                    .add(Column::Doc.eq(docname))
+                    .add(Column::Doc.eq(doc_name))
             )
             .order_by_desc(Column::R)
             .one(&self.conn)
@@ -122,12 +122,12 @@ impl Storage for PostgresStorage {
         Ok(doc.map(|m| m.sv).unwrap_or_default())
     }
 
-    async fn delete_references(&self, room: &str, docname: &str, refs: Vec<Reference>) -> Result<()> {
+    async fn delete_references(&self, room: &str, doc_name: &str, refs: Vec<Reference>) -> Result<()> {
         let _ = Entity::delete_many()
         .filter(
             Condition::all()
                 .add(Column::Room.eq(room))
-                .add(Column::Doc.eq(docname))
+                .add(Column::Doc.eq(doc_name))
                 .add(Column::R.is_in(refs.into_iter().map(|r|r.downcast_ref::<i32>())))
         )
         .exec(&self.conn)

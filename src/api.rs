@@ -384,6 +384,21 @@ fn parse_redis_id(id: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// 比较两个Redis消息ID的大小
+/// 
+/// # 参数
+/// * `a` - 第一个Redis消息ID，格式为"timestamp-sequence"
+/// * `b` - 第二个Redis消息ID，格式为"timestamp-sequence"
+/// 
+/// # 返回值
+/// * `bool` - 如果a小于b返回true，否则返回false
+/// 
+/// # 说明
+/// Redis消息ID由两部分组成:
+/// 1. timestamp: 毫秒级时间戳
+/// 2. sequence: 同一毫秒内的序列号
+/// 
+/// 比较时先比较timestamp，timestamp相同时比较sequence
 pub fn is_smaller_redis_id(a: &str, b: &str) -> bool {
     let parse_id = |s: &str| {
         let mut parts = s.split('-');
@@ -516,7 +531,6 @@ impl Worker {
     }
 
     pub async fn run(&mut self) {
-        
         loop {
             if let Err(e) = self.client.consume_worker_queue(
                 self.opts.try_claim_count,
